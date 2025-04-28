@@ -318,13 +318,15 @@ func (et *ExcelTemplate) processSheet(sheet string) {
 	if !ok {
 		return
 	}
-	tableList, ok := table.([]any)
+	list, ok := table.([]map[string]any)
 	if !ok {
-		return
+		tableList, ok := table.([]any)
+		if ok {
+			list = lo.Map(tableList, func(item any, index int) map[string]any {
+				return item.(map[string]any)
+			})
+		}
 	}
-	list := lo.Map(tableList, func(item any, index int) map[string]any {
-		return item.(map[string]any)
-	})
 
 	if list == nil || len(list) == 0 {
 		return
