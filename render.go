@@ -76,7 +76,7 @@ func OpenFile(templatePath string) (*ExcelTemplate, error) {
 	f, err := excelize.OpenFile(templatePath)
 	if err != nil {
 		fmt.Println(err)
-		return nil, err
+		return nil, fmt.Errorf("OpenFile: failed to open Excel file [path=%s]: %w", templatePath, err)
 	}
 	et := &ExcelTemplate{
 		TemplatePath:  templatePath,
@@ -109,7 +109,10 @@ func (et *ExcelTemplate) Render(data any) (*excelize.File, error) {
 				et.SheetCache[sheet].FillData = listData[i]
 			}
 		}
-		et.processSheet(sheet)
+		err := et.processSheet(sheet)
+		if err != nil {
+			return nil, fmt.Errorf("Render: failed to process sheet [sheet=%s]: %w", sheet, err)
+		}
 	}
 
 	//更新公式缓存
@@ -118,19 +121,19 @@ func (et *ExcelTemplate) Render(data any) (*excelize.File, error) {
 }
 
 // getFormulaResult 获取公式计算结果
-func (et *ExcelTemplate) getFormulaResult(formulaResultCache map[string]any, listIndex int, formulaExpr string, data map[string]any) any {
+func (et *ExcelTemplate) getFormulaResult(formulaResultCache map[string]any, listIndex int, formulaExpr string, data map[string]any) (any, error) {
 	// 构造缓存key
 	cacheKey := fmt.Sprintf("%d_%s", listIndex, formulaExpr)
 	if cachedResult, ok := formulaResultCache[cacheKey]; ok {
 		// 直接使用缓存的结果
-		return cachedResult
+		return cachedResult, nil
 	}
 	value, _, err := et.FormulaEngine.EvalFormula(formulaExpr, data)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("getFormulaResult: failed to evaluate formula [expr=%s]: %w", formulaExpr, err)
 	}
 	formulaResultCache[cacheKey] = value
-	return value
+	return value, nil
 }
 
 func (et *ExcelTemplate) fillRows(mergeCells []excelize.MergeCell, rows [][]string) [][]string {
@@ -175,15 +178,18 @@ func (et *ExcelTemplate) fillRows(mergeCells []excelize.MergeCell, rows [][]stri
 }
 
 // processSheet 处理单个sheet的数据
-func (et *ExcelTemplate) processSheet(sheet string) {
+func (et *ExcelTemplate) processSheet(sheet string) error {
 	// 获取基础数据
 	rows, mergeCells, err := et.getSheetData(sheet)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("processSheet: failed to get sheet data [sheet=%s]: %w", sheet, err)
 	}
 
 	// 处理模板语法
-	et.processTemplates(sheet, rows)
+	err = et.processTemplates(sheet, rows)
+	if err != nil {
+		return fmt.Errorf("processSheet: failed to process templates [sheet=%s]: %w", sheet, err)
+	}
 
 	rows = et.fillRows(mergeCells, rows)
 
@@ -219,7 +225,7 @@ func (et *ExcelTemplate) processSheet(sheet string) {
 			value := col
 			cellName, err := excelize.CoordinatesToCellName(colNum, rowNum)
 			if err != nil {
-				panic(err)
+				return fmt.Errorf("processSheet: failed to convert coordinates to cell name [sheet=%s, row=%d, col=%d]: %w", sheet, rowNum, colNum, err)
 			}
 
 			// if ContainsGoTemplateSyntax(value) {
@@ -251,23 +257,23 @@ func (et *ExcelTemplate) processSheet(sheet string) {
 					columnCell := ColumnCell{}
 					et.SheetCache[sheet].DataRowHeight, err = et.File.GetRowHeight(sheet, rowNum)
 					if err != nil {
-						panic(err)
+						return fmt.Errorf("processSheet: failed to get row height [sheet=%s, row=%d]: %w", sheet, rowNum, err)
 					}
 
 					columnCell._key = rowNum
 					columnCell.Formula, err = et.File.GetCellFormula(sheet, cellName)
 					if err != nil {
-						panic(err)
+						return fmt.Errorf("processSheet: failed to get cell formula [sheet=%s, cell=%s]: %w", sheet, cellName, err)
 					}
 
 					//设置样式
 					columnCell.StyleId, err = et.File.GetCellStyle(sheet, cellName)
 					if err != nil {
-						panic(err)
+						return fmt.Errorf("processSheet: failed to get cell style [sheet=%s, cell=%s]: %w", sheet, cellName, err)
 					}
 					columnCell.Style, err = et.File.GetStyle(columnCell.StyleId)
 					if err != nil {
-						panic(err)
+						return fmt.Errorf("processSheet: failed to get style details [sheet=%s, styleId=%d]: %w", sheet, columnCell.StyleId, err)
 					}
 					//清空公式，因为带公式的话后续RemoveRow会报错
 					et.File.SetCellFormula(sheet, cellName, "")
@@ -283,13 +289,13 @@ func (et *ExcelTemplate) processSheet(sheet string) {
 
 				colName, err := excelize.ColumnNumberToName(colNum)
 				if err != nil {
-					panic(err)
+					return fmt.Errorf("processSheet: failed to convert column number to name [sheet=%s, col=%d]: %w", sheet, colNum, err)
 				}
 				column.ColName = colName
 
 				renderColName, err := excelize.ColumnNumberToName(column.RenderColNum)
 				if err != nil {
-					panic(err)
+					return fmt.Errorf("processSheet: failed to convert render column number to name [sheet=%s, col=%d]: %w", sheet, column.RenderColNum, err)
 				}
 				column.RenderColName = renderColName
 
@@ -304,7 +310,7 @@ func (et *ExcelTemplate) processSheet(sheet string) {
 	}
 
 	if len(columns) == 0 {
-		return
+		return nil
 	}
 
 	//表头留1行 数据留2行 这样如果有公式的话会自动更新
@@ -316,7 +322,7 @@ func (et *ExcelTemplate) processSheet(sheet string) {
 
 	table, ok := et.SheetCache[sheet].FillData[et.ListField]
 	if !ok {
-		return
+		return nil
 	}
 	list, ok := table.([]map[string]any)
 	if !ok {
@@ -329,7 +335,7 @@ func (et *ExcelTemplate) processSheet(sheet string) {
 	}
 
 	if list == nil || len(list) == 0 {
-		return
+		return nil
 	}
 
 	// 处理分类汇总
@@ -339,27 +345,31 @@ func (et *ExcelTemplate) processSheet(sheet string) {
 	et.File.InsertRows(sheet, fillRowNum+1, len(list)-2)
 
 	// 处理数据填充
-	et.processData(sheet, list)
+	err = et.processData(sheet, list)
+	if err != nil {
+		return fmt.Errorf("processSheet: failed to process data [sheet=%s]: %w", sheet, err)
+	}
 
 	// 设置自动筛选
 	et.setAutoFilter(sheet, len(list))
+	return nil
 }
 
 // getSheetData 获取sheet的基础数据
 func (et *ExcelTemplate) getSheetData(sheet string) ([][]string, []excelize.MergeCell, error) {
 	rows, err := et.File.GetRows(sheet)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("getSheetData: failed to get sheet rows [sheet=%s]: %w", sheet, err)
 	}
 	mergeCells, err := et.File.GetMergeCells(sheet)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("getSheetData: failed to get merge cells [sheet=%s]: %w", sheet, err)
 	}
 	return rows, mergeCells, nil
 }
 
 // processTemplates 处理模板语法
-func (et *ExcelTemplate) processTemplates(sheet string, rows [][]string) {
+func (et *ExcelTemplate) processTemplates(sheet string, rows [][]string) error {
 	fillData := et.SheetCache[sheet].FillData
 	for i, row := range rows {
 		if len(row) > 0 && row[0] == constant.DataField {
@@ -369,25 +379,31 @@ func (et *ExcelTemplate) processTemplates(sheet string, rows [][]string) {
 			if ContainsGoTemplateSyntax(col) {
 				value, err := RenderTemplate(col, fillData, et.FuncMap)
 				if err != nil {
-					panic(err)
+					return fmt.Errorf("processTemplates: failed to render template [sheet=%s, row=%d, col=%d]: %w", sheet, i+1, j+1, err)
 				}
 				cellName, err := excelize.CoordinatesToCellName(j+1, i+1)
 				if err != nil {
-					panic(err)
+					return fmt.Errorf("processTemplates: failed to convert coordinates to cell name [sheet=%s, row=%d, col=%d]: %w", sheet, i+1, j+1, err)
 				}
 				et.File.SetCellValue(sheet, cellName, value)
 			}
 		}
 	}
+	return nil
 }
 
 // processData 处理数据填充
-func (et *ExcelTemplate) processData(sheet string, list []map[string]any) {
+func (et *ExcelTemplate) processData(sheet string, list []map[string]any) error {
 	for i := range list {
-		et.processDataRow(sheet, i, list[i])
+		err := et.processDataRow(sheet, i, list[i])
+		if err != nil {
+			return fmt.Errorf("processData: failed to process data row [sheet=%s, row=%d]: %w", sheet, i, err)
+		}
 	}
+	return nil
 }
-func (et *ExcelTemplate) processDataRow(sheet string, listIndex int, rowData map[string]any) {
+
+func (et *ExcelTemplate) processDataRow(sheet string, listIndex int, rowData map[string]any) error {
 	columns := et.SheetCache[sheet].ColumnList
 	fillRowNum := et.SheetCache[sheet].StartRowNum
 	rowNum := fillRowNum + listIndex
@@ -401,15 +417,22 @@ func (et *ExcelTemplate) processDataRow(sheet string, listIndex int, rowData map
 	}
 	for _, column := range columns {
 		cellName := fmt.Sprintf("%s%d", column.RenderColName, rowNum)
-		et.setCellValue(sheet, cellName, column, _listIndex, rowNum, rowData, isSubtotal)
+		err := et.setCellValue(sheet, cellName, column, _listIndex, rowNum, rowData, isSubtotal)
+		if err != nil {
+			return fmt.Errorf("processDataRow: failed to set cell value [sheet=%s, cell=%s]: %w", sheet, cellName, err)
+		}
 
 		if isSubtotal {
 			et.File.SetCellStyle(sheet, cellName, cellName, 0)
 			continue
 		}
 
-		et.applyCellStyle(sheet, formulaResultCache, styleIdCache, cellName, column, _listIndex, rowData)
+		err = et.applyCellStyle(sheet, formulaResultCache, styleIdCache, cellName, column, _listIndex, rowData)
+		if err != nil {
+			return fmt.Errorf("processDataRow: failed to apply cell style [sheet=%s, cell=%s]: %w", sheet, cellName, err)
+		}
 	}
+	return nil
 }
 
 // setAutoFilter 设置自动筛选
@@ -428,31 +451,37 @@ func (et *ExcelTemplate) setAutoFilter(sheet string, listLen int) {
 }
 
 // applyCellStyle 处理单元格样式设置，包括背景色和字体颜色
-func (et *ExcelTemplate) applyCellStyle(sheet string, formulaResultCache map[string]any, styleIdCache map[string]int, cellName string, column *Column, listIndex int, rowData map[string]any) {
+func (et *ExcelTemplate) applyCellStyle(sheet string, formulaResultCache map[string]any, styleIdCache map[string]int, cellName string, column *Column, listIndex int, rowData map[string]any) error {
 	idx := listIndex % len(column.CellList)
 	dataProp := column.CellList[idx]
 	et.File.SetCellStyle(sheet, cellName, cellName, dataProp.StyleId)
 
 	if len(column.BackgroundColorExpr) == 0 && len(column.FontColorExpr) == 0 {
-		return
+		return nil
 	}
 
 	var bgColor = ""
 	if column.BackgroundColorExpr != "" && column.BackgroundColorExpr[0] == '=' {
-		result := et.getFormulaResult(formulaResultCache, listIndex, column.BackgroundColorExpr, rowData)
+		result, err := et.getFormulaResult(formulaResultCache, listIndex, column.BackgroundColorExpr, rowData)
+		if err != nil {
+			return fmt.Errorf("applyCellStyle: failed to calculate background color formula [sheet=%s, cell=%s, expr=%s]: %w", sheet, cellName, column.BackgroundColorExpr, err)
+		}
 		if result != nil {
 			bgColor, _ = result.(string)
 		}
 	}
 	var fontColor = ""
 	if column.FontColorExpr != "" && column.FontColorExpr[0] == '=' {
-		result := et.getFormulaResult(formulaResultCache, listIndex, column.FontColorExpr, rowData)
+		result, err := et.getFormulaResult(formulaResultCache, listIndex, column.FontColorExpr, rowData)
+		if err != nil {
+			return fmt.Errorf("applyCellStyle: failed to calculate font color formula [sheet=%s, cell=%s, expr=%s]: %w", sheet, cellName, column.FontColorExpr, err)
+		}
 		if result != nil {
 			fontColor, _ = result.(string)
 		}
 	}
 	if bgColor == "" && fontColor == "" {
-		return
+		return nil
 	}
 
 	styleKey := fmt.Sprintf("%d-%s-%s", dataProp.StyleId, bgColor, fontColor)
@@ -473,15 +502,16 @@ func (et *ExcelTemplate) applyCellStyle(sheet string, formulaResultCache map[str
 		}
 		styleId, err := et.File.NewStyle(style)
 		if err != nil {
-			panic(err)
+			return fmt.Errorf("applyCellStyle: failed to create new style [sheet=%s, cell=%s]: %w", sheet, cellName, err)
 		}
 		styleIdCache[styleKey] = styleId
 		et.File.SetCellStyle(sheet, cellName, cellName, styleId)
 	}
+	return nil
 }
 
 // setCellValue 处理单元格值设置，包括小计行和普通数据行
-func (et *ExcelTemplate) setCellValue(sheet string, cellName string, column *Column, listIndex int, rowNum int, rowData map[string]any, isSubtotal bool) {
+func (et *ExcelTemplate) setCellValue(sheet string, cellName string, column *Column, listIndex int, rowNum int, rowData map[string]any, isSubtotal bool) error {
 	idx := listIndex % len(column.CellList)
 	itemData, ok := rowData[column.DataField]
 	//如果是分类汇总字段
@@ -498,7 +528,7 @@ func (et *ExcelTemplate) setCellValue(sheet string, cellName string, column *Col
 				}
 			}
 		}
-		return
+		return nil
 	}
 
 	dataProp := column.CellList[idx]
@@ -506,16 +536,16 @@ func (et *ExcelTemplate) setCellValue(sheet string, cellName string, column *Col
 	if dataProp.Formula != "" {
 		var newFormula = ReplaceFormulaRow(dataProp.Formula, rowNum, -1)
 		et.File.SetCellFormula(sheet, cellName, newFormula)
-		return
+		return nil
 	}
 	//如果字段使用了模板语法
 	if column.IsTemplate {
 		value, err := RenderTemplate(column.DataField, rowData, et.FuncMap)
 		if err != nil {
-			panic(err)
+			return fmt.Errorf("setCellValue: failed to render template field [sheet=%s, cell=%s, field=%s]: %w", sheet, cellName, column.DataField, err)
 		}
 		et.File.SetCellValue(sheet, cellName, value)
-		return
+		return nil
 	}
 	// dataConfigValue := column.CellList[idx].Data
 	// if dataConfigValue != "" {
@@ -531,6 +561,7 @@ func (et *ExcelTemplate) setCellValue(sheet string, cellName string, column *Col
 	// 	}
 	// }
 	et.File.SetCellValue(sheet, cellName, itemData)
+	return nil
 }
 
 // handleSubtotal 处理数据的分类汇总
