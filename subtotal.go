@@ -11,6 +11,10 @@ type Subtotal struct {
 
 var Subtotals = []Subtotal{
 	{Code: 9, Func: "求和", GroupFieldSuffix: "汇总", TotalField: "总计"},
+	{Code: 3, Func: "计数", GroupFieldSuffix: "计数", TotalField: "总计数"},
+	{Code: 1, Func: "平均值", GroupFieldSuffix: "平均值", TotalField: "总计平均值"},
+	{Code: 4, Func: "最大值", GroupFieldSuffix: "最大值", TotalField: "总计最大值"},
+	{Code: 5, Func: "最小值", GroupFieldSuffix: "最小值", TotalField: "总计最小值"},
 }
 
 func GroupAndSubtotal(data []map[string]any, groupField string, sumField string, subtotalCellLetter string, dataStartRow int, subtotal Subtotal) []map[string]any {

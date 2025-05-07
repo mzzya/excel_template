@@ -516,7 +516,13 @@ func (et *ExcelTemplate) setCellValue(sheet string, cellName string, column *Col
 	itemData, ok := rowData[column.DataField]
 	//如果是分类汇总字段
 	if isSubtotal {
-		et.File.SetCellValue(sheet, cellName, "")
+		v, err := et.File.GetCellValue(sheet, cellName)
+		if err != nil {
+			return fmt.Errorf("setCellValue: failed to get cell value [sheet=%s, cell=%s]: %w", sheet, cellName, err)
+		}
+		if v != "" {
+			et.File.SetCellValue(sheet, cellName, "")
+		}
 		if ok {
 			valueStr, ok := itemData.(string)
 			// fmt.Println("valueStr", itemData, valueStr, column.DataField)
@@ -571,18 +577,54 @@ func (et *ExcelTemplate) handleSubtotal(config map[string][][]string, list []map
 			_, groupByIdex, gOk := lo.FindIndexOf(row, func(item string) bool {
 				return item == "分类"
 			})
-			_, subtotalIndex, sOk := lo.FindIndexOf(row, func(item string) bool {
-				return item == "求和"
-			})
-			if gOk && sOk {
-				groupKey := config[constant.DataField][0][groupByIdex]
-				subtotalKey := config[constant.DataField][0][subtotalIndex]
-				subtotalCellLetter, _ := excelize.ColumnNumberToName(subtotalIndex)
-				subtotal, _ := lo.Find(Subtotals, func(item Subtotal) bool {
-					return item.Func == "求和"
-				})
-				list = GroupAndSubtotal(list, groupKey, subtotalKey, subtotalCellLetter, fillRowNum, subtotal)
+			if !gOk {
+				continue
 			}
+			groupKey := config[constant.DataField][0][groupByIdex]
+
+			// 查找所有汇总操作列
+			for colIndex, colValue := range row {
+				if colIndex == 0 || colValue == "" || colValue == "分类" {
+					continue
+				}
+
+				// 查找匹配的汇总函数
+				subtotal, found := lo.Find(Subtotals, func(item Subtotal) bool {
+					return item.Func == colValue
+				})
+
+				if !found {
+					continue // 如果没有找到匹配的汇总函数，跳过
+				}
+
+				// 获取对应的数据字段
+				subtotalKey := config[constant.DataField][0][colIndex]
+				if subtotalKey == "" {
+					continue
+				}
+
+				// 获取列名
+				subtotalCellLetter, err := excelize.ColumnNumberToName(colIndex)
+				if err != nil {
+					continue
+				}
+
+				// 执行汇总操作
+				list = GroupAndSubtotal(list, groupKey, subtotalKey, subtotalCellLetter, fillRowNum, subtotal)
+				break
+			}
+
+			// _, subtotalIndex, sOk := lo.FindIndexOf(row, func(item string) bool {
+			// 	return item == "求和"
+			// })
+			// if sOk {
+			// 	subtotalKey := config[constant.DataField][0][subtotalIndex]
+			// 	subtotalCellLetter, _ := excelize.ColumnNumberToName(subtotalIndex)
+			// 	subtotal, _ := lo.Find(Subtotals, func(item Subtotal) bool {
+			// 		return item.Func == "求和"
+			// 	})
+			// 	list = GroupAndSubtotal(list, groupKey, subtotalKey, subtotalCellLetter, fillRowNum, subtotal)
+			// }
 		}
 	}
 	return list
