@@ -52,6 +52,31 @@ go mod tidy
 
 支持图片与Base64数据URI之间的转换，详情请参考 [image.go](./image.go) 文件。
 
+## 示例效果
+
+下面是三个工作表的模板和渲染结果对比：
+
+### Sheet1
+模板:
+![Sheet1 Template](./image/Sheet1.png)
+
+渲染结果:
+![Sheet1 Result](./image/Sheet1-data.png)
+
+### Sheet2
+模板:
+![Sheet2 Template](./image/Sheet2.png)
+
+渲染结果:
+![Sheet2 Result](./image/Sheet2-data.png)
+
+### Sheet3
+模板:
+![Sheet3 Template](./image/Sheet3.png)
+
+渲染结果:
+![Sheet3 Result](./image/Sheet3-data.png)
+
 ## 开发说明
 
 ### 项目结构

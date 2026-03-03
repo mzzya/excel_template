@@ -33,6 +33,20 @@ func generateRandomData(i int) map[string]any {
 		"签收时间": time.Now().Format("2006-01-02"),
 	}
 }
+func TestMain(m *testing.M) {
+	// 确保 dist 目录存在
+	err := os.MkdirAll("dist", os.ModePerm)
+	if err != nil {
+		fmt.Printf("创建 dist 目录失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 运行所有测试
+	exitCode := m.Run()
+
+	os.Exit(exitCode)
+}
+
 func TestRender(t *testing.T) {
 
 	// pool, err := NewGojaPool(20)
@@ -80,6 +94,13 @@ func TestRender(t *testing.T) {
 	if err != nil {
 		t.Fail()
 	}
+	
+	// 创建 dist 目录（如果不存在）
+	err = os.MkdirAll("dist", os.ModePerm)
+	if err != nil {
+		t.Fatalf("创建 dist 目录失败: %v", err)
+	}
+	
 	f.SaveAs("dist/output.xlsx")
 	t.Logf("程序运行时间：%s", time.Since(startTime))
 }
