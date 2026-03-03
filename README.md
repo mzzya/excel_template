@@ -68,8 +68,7 @@ go mod tidy
 ├── hyperformula_test.go   # HyperFormula引擎测试
 ├── subtotal.go            # 分类汇总功能
 ├── template.go            # 模板处理基础函数
-├── README.md              # 项目说明文档
-└── package.json           # Node.js依赖（可能用于前端集成）
+└── README.md              # 项目说明文档
 ```
 
 ### 核心组件
@@ -134,7 +133,6 @@ go test ./...
 - [excelize](https://github.com/xuri/excelize): Excel操作核心库
 - [go-deepcopy](https://github.com/tiendc/go-deepcopy): 深度复制工具
 - [lo (Lodash-style)](https://github.com/samber/lo): 实用函数集合
-- [HyperFormula](https://hyperformula.handsontable.com/): 公式计算引擎
 
 ## 许可证
 
