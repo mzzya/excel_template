@@ -1,7 +1,9 @@
 package excel_template
 
 import (
+	"bytes"
 	"fmt"
+	"image"
 	"strings"
 	"text/template"
 
@@ -10,6 +12,8 @@ import (
 
 	"github.com/samber/lo"
 	"github.com/xuri/excelize/v2"
+
+	_ "image/png"
 )
 
 type ColumnCell struct {
@@ -385,7 +389,7 @@ func (et *ExcelTemplate) processTemplates(sheet string, rows [][]string) error {
 				if err != nil {
 					return fmt.Errorf("processTemplates: failed to convert coordinates to cell name [sheet=%s, row=%d, col=%d]: %w", sheet, i+1, j+1, err)
 				}
-				et.File.SetCellValue(sheet, cellName, value)
+				et.setCellData(sheet, cellName, value)
 			}
 		}
 	}
@@ -417,7 +421,7 @@ func (et *ExcelTemplate) processDataRow(sheet string, listIndex int, rowData map
 	}
 	for _, column := range columns {
 		cellName := fmt.Sprintf("%s%d", column.RenderColName, rowNum)
-		err := et.setCellValue(sheet, cellName, column, _listIndex, rowNum, rowData, isSubtotal)
+		err := et.processCellData(sheet, cellName, column, _listIndex, rowNum, rowData, isSubtotal)
 		if err != nil {
 			return fmt.Errorf("processDataRow: failed to set cell value [sheet=%s, cell=%s]: %w", sheet, cellName, err)
 		}
@@ -510,18 +514,21 @@ func (et *ExcelTemplate) applyCellStyle(sheet string, formulaResultCache map[str
 	return nil
 }
 
-// setCellValue 处理单元格值设置，包括小计行和普通数据行
-func (et *ExcelTemplate) setCellValue(sheet string, cellName string, column *Column, listIndex int, rowNum int, rowData map[string]any, isSubtotal bool) error {
+// processCellData 处理单元格数据设置，包括小计行和普通数据行，支持图片自动插入
+func (et *ExcelTemplate) processCellData(sheet string, cellName string, column *Column, listIndex int, rowNum int, rowData map[string]any, isSubtotal bool) error {
 	idx := listIndex % len(column.CellList)
 	itemData, ok := rowData[column.DataField]
 	//如果是分类汇总字段
 	if isSubtotal {
 		v, err := et.File.GetCellValue(sheet, cellName)
 		if err != nil {
-			return fmt.Errorf("setCellValue: failed to get cell value [sheet=%s, cell=%s]: %w", sheet, cellName, err)
+			return fmt.Errorf("processCellData: failed to get cell value [sheet=%s, cell=%s]: %w", sheet, cellName, err)
 		}
 		if v != "" {
-			et.File.SetCellValue(sheet, cellName, "")
+			err = et.setCellData(sheet, cellName, "")
+			if err != nil {
+				return err
+			}
 		}
 		if ok {
 			valueStr, ok := itemData.(string)
@@ -530,7 +537,10 @@ func (et *ExcelTemplate) setCellValue(sheet string, cellName string, column *Col
 				if valueStr[0] == '=' {
 					et.File.SetCellFormula(sheet, cellName, valueStr[1:])
 				} else {
-					et.File.SetCellValue(sheet, cellName, itemData)
+					err = et.setCellData(sheet, cellName, itemData)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -548,9 +558,12 @@ func (et *ExcelTemplate) setCellValue(sheet string, cellName string, column *Col
 	if column.IsTemplate {
 		value, err := RenderTemplate(column.DataField, rowData, et.FuncMap)
 		if err != nil {
-			return fmt.Errorf("setCellValue: failed to render template field [sheet=%s, cell=%s, field=%s]: %w", sheet, cellName, column.DataField, err)
+			return fmt.Errorf("processCellData: failed to render template field [sheet=%s, cell=%s, field=%s]: %w", sheet, cellName, column.DataField, err)
 		}
-		et.File.SetCellValue(sheet, cellName, value)
+		err = et.setCellData(sheet, cellName, value)
+		if err != nil {
+			return err
+		}
 		return nil
 	}
 	// dataConfigValue := column.CellList[idx].Data
@@ -566,8 +579,133 @@ func (et *ExcelTemplate) setCellValue(sheet string, cellName string, column *Col
 	// 		et.File.SetCellValue(sheet, cellName, dataConfigValue)
 	// 	}
 	// }
-	et.File.SetCellValue(sheet, cellName, itemData)
+	err := et.setCellData(sheet, cellName, itemData)
+	if err != nil {
+		return err
+	}
 	return nil
+}
+
+// setCellData 包装了 SetCellValue，当值是图片数据时自动插入图片
+func (et *ExcelTemplate) setCellData(sheet, cellName string, value any) error {
+	// 检查是否为字符串类型
+	strValue, isStr := value.(string)
+	if !isStr {
+		// 不是字符串，直接设置单元格值
+		return et.File.SetCellValue(sheet, cellName, value)
+	}
+
+	// 使用image包中的函数检查是否为base64图片数据
+	if IsBase64Image(strValue) {
+		// 使用image包中的函数处理图片数据
+		ext, imageData, config, err := ProcessImageData(strValue)
+		if err != nil {
+			// 解析失败，仍然设置为文本值
+			return et.File.SetCellValue(sheet, cellName, err.Error())
+		}
+		col, row, err := excelize.CellNameToCoordinates(cellName)
+		if err != nil {
+			return err
+		}
+		cellHeight, err := et.File.GetRowHeight(sheet, row)
+		if err != nil {
+			return err
+		}
+		colName, err := excelize.ColumnNumberToName(col)
+		if err != nil {
+			return err
+		}
+		cellWidth, err := et.File.GetColWidth(sheet, colName)
+		if err != nil {
+			return err
+		}
+
+		//等比缩放图片，最大框高不得超过 height,width
+		var scale = 1.0
+
+		// 计算缩放比例，保持图片等比缩放且不超过单元格大小
+		imgWidth := float64(config.Width)
+		imgHeight := float64(config.Height)
+		options := &excelize.GraphicOptions{}
+		// 尝试获取当前单元格上的图片信息
+		pic, err := et.File.GetPictures(sheet, cellName)
+		if err != nil {
+			// 如果获取图片信息失败，继续使用单元格尺寸计算缩放
+		} else if len(pic) > 0 {
+			// 如果单元格上有现有图片，使用现有图片的尺寸信息进行调整
+			existingPic := pic[0]
+			// 获取图片配置信息
+			existsImageConfig, _, err := image.DecodeConfig(bytes.NewReader(existingPic.File))
+			if err != nil {
+				return err
+			}
+			// 旧图原始尺寸
+			oldWidth := float64(existsImageConfig.Width)
+			oldHeight := float64(existsImageConfig.Height)
+
+			// 旧图当前缩放
+			oldScaleX := existingPic.Format.ScaleX
+			oldScaleY := existingPic.Format.ScaleY
+
+			// 旧图当前实际显示尺寸
+			displayWidth := oldWidth * oldScaleX
+			displayHeight := oldHeight * oldScaleY
+
+			// 计算新图需要的缩放比例
+			scaleX := displayWidth / imgWidth
+			scaleY := displayHeight / imgHeight
+
+			// 复制旧配置，避免引用问题
+			options = existingPic.Format
+			options.ScaleX = scaleX
+			options.ScaleY = scaleY
+
+			err = et.File.DeletePicture(sheet, cellName)
+			if err != nil {
+				return err
+			}
+		} else {
+			// 如果单元格上没有现有图片，使用单元格尺寸计算缩放
+			safetyFactor := 0.9 // 设置一个小于1的安全系数，确保图片不会超出单元格
+
+			// 1列宽单位 ≈ 7像素（对于默认字体）
+			estimatedPixelWidth := cellWidth * 7 * safetyFactor
+			// 1点 ≈ 1.33像素（在96 DPI下），但为了确保图片不超出，稍微缩小
+			estimatedPixelHeight := cellHeight * 1.33 * safetyFactor
+
+			// 计算缩放比例，确保图片适应单元格
+			scaleX := estimatedPixelWidth / imgWidth
+			scaleY := estimatedPixelHeight / imgHeight
+			// 取较小的比例，确保图片完全适应单元格
+			if scaleX < scaleY {
+				scale = scaleX
+			} else {
+				scale = scaleY
+			}
+			options.ScaleX = scale
+			options.ScaleY = scale
+		}
+
+		err = et.File.SetCellValue(sheet, cellName, "")
+		if err != nil {
+			return err
+		}
+		err = et.File.AddPictureFromBytes(sheet, cellName, &excelize.Picture{
+			Extension: ext,
+			File:      imageData,
+			Format:    options,
+		})
+
+		if err != nil {
+			// 添加图片失败，设置为文本值
+			return et.File.SetCellValue(sheet, cellName, err.Error())
+		}
+
+		return nil
+	}
+
+	// 不是图片数据，直接设置单元格值
+	return et.File.SetCellValue(sheet, cellName, value)
 }
 
 // handleSubtotal 处理数据的分类汇总

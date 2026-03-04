@@ -20,6 +20,10 @@ func generateRandomData(i int) map[string]any {
 	companName := []string{"恒张三世信息科技有限公司", "宏李四网络技术有限公司", "鑫航王五据服务有限公司"}
 	names := []string{"张三", "李四", "王五"}
 	YN := []string{"是", "否"}
+	imageBase64, err := ImageToBase64WithMime("./image/barcode.png")
+	if err != nil {
+		panic(err)
+	}
 	return map[string]any{
 		"订单号":  fmt.Sprintf("order%07d_%d", rand.Intn(1000000), i),
 		"客户名称": names[rand.Intn(len(names))],
@@ -31,6 +35,7 @@ func generateRandomData(i int) map[string]any {
 		"数量":   rand.Intn(100),
 		"下单时间": time.Now().Format("2006-01-02 15:04:05"),
 		"签收时间": time.Now().Format("2006-01-02"),
+		"条形码":  imageBase64,
 	}
 }
 func TestMain(m *testing.M) {
@@ -56,7 +61,6 @@ func TestRender(t *testing.T) {
 	// }
 
 	// SetFormulaEngine(pool)
-
 	var fillData = make(map[string]any)
 	data := make([]map[string]any, 0, 100)
 
@@ -67,7 +71,10 @@ func TestRender(t *testing.T) {
 	fillData["总金额"] = 10000000
 	fillData["对账日期"] = time.Now().Format("2006年01月02日")
 	fillData["生成日期"] = time.Now().Format("2006-01-02")
-	imageBase64, _ := ImageToBase64WithMime("barcode.png")
+	imageBase64, err := ImageToBase64WithMime("./image/barcode.png")
+	if err != nil {
+		t.Fatal("无法读取条形码图片: ", err)
+	}
 	fillData["条形码"] = imageBase64
 
 	bts, err := json.Marshal(fillData)
@@ -94,13 +101,13 @@ func TestRender(t *testing.T) {
 	if err != nil {
 		t.Fail()
 	}
-	
+
 	// 创建 dist 目录（如果不存在）
 	err = os.MkdirAll("dist", os.ModePerm)
 	if err != nil {
 		t.Fatalf("创建 dist 目录失败: %v", err)
 	}
-	
+
 	f.SaveAs("dist/output.xlsx")
 	t.Logf("程序运行时间：%s", time.Since(startTime))
 }

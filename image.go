@@ -1,9 +1,11 @@
 package excel_template
 
 import (
+	"bytes"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"image"
 	"os"
 	"regexp"
 	"strings"
@@ -52,4 +54,50 @@ func ParseBase64Image(dataURI string) (mimeType string, data []byte, err error) 
 	}
 
 	return mimeType, data, nil
+}
+
+// IsBase64Image 检查字符串是否为base64图片格式
+func IsBase64Image(value string) bool {
+	return strings.HasPrefix(value, "data:image/") && strings.Contains(value, ";base64,")
+}
+
+// GetImageExtension 根据MIME类型获取图片扩展名
+func GetImageExtension(mimeType string) string {
+	switch mimeType {
+	case "jpeg":
+		return ".jpeg"
+	case "jpg":
+		return ".jpg"
+	case "png":
+		return ".png"
+	case "gif":
+		return ".gif"
+	case "bmp":
+		return ".bmp"
+	default:
+		return ".png" // 默认使用 png 格式
+	}
+}
+
+// ProcessImageData 处理base64图片数据，返回扩展名、解码后的图片数据以及图片的配置信息
+func ProcessImageData(value string) (extension string, imageData []byte, config image.Config, err error) {
+	if !IsBase64Image(value) {
+		return "", nil, image.Config{}, errors.New("不是base64图片格式")
+	}
+
+	mimeType, data, err := ParseBase64Image(value)
+	if err != nil {
+		return "", nil, image.Config{}, err
+	}
+
+	extension = GetImageExtension(mimeType)
+	imageData = data
+
+	// 获取图片配置信息
+	config, _, err = image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return "", nil, image.Config{}, fmt.Errorf("无法获取图片配置信息: %w", err)
+	}
+
+	return extension, imageData, config, nil
 }
