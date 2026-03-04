@@ -64,7 +64,7 @@ func TestRender(t *testing.T) {
 	var fillData = make(map[string]any)
 	data := make([]map[string]any, 0, 100)
 
-	for i := range 20 {
+	for i := range 200 {
 		data = append(data, generateRandomData(i+1))
 	}
 	fillData["table"] = data
@@ -97,6 +97,16 @@ func TestRender(t *testing.T) {
 			return strings.Repeat(s, count)
 		},
 	}
+	//https://xuri.me/excelize/zh-hans/workbook.html#SetPageLayout
+	enable, size, zero := true, 9, 0
+	et.SheetPropsOptions = &excelize.SheetPropsOptions{
+		FitToPage: &enable,
+	}
+	et.PageLayoutOptions = &excelize.PageLayoutOptions{
+		FitToHeight: &zero,
+		Size:        &size,
+	}
+
 	f, err := et.Render(fillData)
 	if err != nil {
 		t.Fail()

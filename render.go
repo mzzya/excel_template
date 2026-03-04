@@ -80,6 +80,9 @@ type ExcelTemplate struct {
 	FormulaEngine FormulaEngine
 	FuncMap       template.FuncMap
 	ListField     string
+
+	SheetPropsOptions *excelize.SheetPropsOptions
+	PageLayoutOptions *excelize.PageLayoutOptions
 }
 
 var configKeys = []string{constant.Header, constant.Data, constant.DataField, constant.BackgroundColor, constant.FontColor, constant.Subtotal}
@@ -402,6 +405,9 @@ func (et *ExcelTemplate) processSheet(sheet string) error {
 
 	// 设置自动筛选
 	et.setAutoFilter(sheet, len(list))
+
+	et.File.SetSheetProps(sheet, et.SheetPropsOptions)
+	et.File.SetPageLayout(sheet, et.PageLayoutOptions)
 	return nil
 }
 
