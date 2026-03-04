@@ -16,6 +16,18 @@ import (
 	_ "image/png"
 )
 
+type MergeRange struct {
+	StartCell string
+	EndCell   string
+
+	StartCol int
+	StartRow int
+	EndCol   int
+	EndRow   int
+
+	Value string
+}
+
 type ColumnCell struct {
 	_key    int
 	Formula string
@@ -28,6 +40,9 @@ type ColumnCell struct {
 }
 type Column struct {
 	_key int
+	// 是否是合并单元格
+	IsMergeCell bool
+	MergeRange  *MergeRange
 	// 模板中的列号
 	ColNum  int
 	ColName string
@@ -52,6 +67,7 @@ type SheetCache struct {
 	StartRowNum   int
 	FillData      map[string]any
 	DataRowHeight float64
+	MergeRanges   []MergeRange
 }
 
 // ExcelTemplate 表示Excel模板渲染器
@@ -90,6 +106,41 @@ func OpenFile(templatePath string) (*ExcelTemplate, error) {
 		ListField:     "table",
 	}
 	return et, nil
+}
+
+func parseMergeCells(mergeCells []excelize.MergeCell) []MergeRange {
+	var result []MergeRange
+
+	for _, merge := range mergeCells {
+		rangeStr := merge[0]
+		value := merge[1]
+
+		coords := strings.Split(rangeStr, ":")
+		if len(coords) != 2 {
+			continue
+		}
+
+		startCell := coords[0]
+		endCell := coords[1]
+
+		startCol, startRow, err1 := excelize.CellNameToCoordinates(startCell)
+		endCol, endRow, err2 := excelize.CellNameToCoordinates(endCell)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+
+		result = append(result, MergeRange{
+			StartCell: startCell,
+			EndCell:   endCell,
+			StartCol:  startCol,
+			StartRow:  startRow,
+			EndCol:    endCol,
+			EndRow:    endRow,
+			Value:     value,
+		})
+	}
+
+	return result
 }
 
 type RenderOptions struct {
@@ -140,32 +191,17 @@ func (et *ExcelTemplate) getFormulaResult(formulaResultCache map[string]any, lis
 	return value, nil
 }
 
-func (et *ExcelTemplate) fillRows(mergeCells []excelize.MergeCell, rows [][]string) [][]string {
-	for _, merge := range mergeCells {
-		rangeStr := merge[0]
-		value := merge[1]
-
-		startCell, endCell := "", ""
-		if coords := strings.Split(rangeStr, ":"); len(coords) == 2 {
-			startCell, endCell = coords[0], coords[1]
-		} else {
-			continue
-		}
-
-		startCol, startRow, err1 := excelize.CellNameToCoordinates(startCell)
-		endCol, endRow, err2 := excelize.CellNameToCoordinates(endCell)
-		if err1 != nil || err2 != nil {
-			continue
-		}
+func (et *ExcelTemplate) fillRows(mergeRanges []MergeRange, rows [][]string) [][]string {
+	for _, merge := range mergeRanges {
 		// 填充 value 到 rows 中对应的区域（行和列都从 1 开始，所以要减 1）
-		for row := startRow - 1; row <= endRow-1; row++ {
+		for row := merge.StartRow - 1; row <= merge.EndRow-1; row++ {
 			// 若当前行超出 rows 范围，先扩展 rows 行数
 			for len(rows) <= row {
 				rows = append(rows, []string{})
 			}
 
 			// 当前行的最大列数
-			neededCols := endCol
+			neededCols := merge.EndCol
 			if len(rows[row]) < neededCols {
 				newRow := make([]string, neededCols)
 				copy(newRow, rows[row])
@@ -173,8 +209,8 @@ func (et *ExcelTemplate) fillRows(mergeCells []excelize.MergeCell, rows [][]stri
 			}
 
 			// 写入合并区域的每个单元格
-			for col := startCol - 1; col <= endCol-1; col++ {
-				rows[row][col] = value
+			for col := merge.StartCol - 1; col <= merge.EndCol-1; col++ {
+				rows[row][col] = merge.Value
 			}
 		}
 	}
@@ -194,8 +230,9 @@ func (et *ExcelTemplate) processSheet(sheet string) error {
 	if err != nil {
 		return fmt.Errorf("processSheet: failed to process templates [sheet=%s]: %w", sheet, err)
 	}
-
-	rows = et.fillRows(mergeCells, rows)
+	mergeRanges := parseMergeCells(mergeCells)
+	et.SheetCache[sheet].MergeRanges = mergeRanges
+	rows = et.fillRows(mergeRanges, rows)
 
 	// 处理配置和列信息
 	config := make(map[string][][]string)
@@ -290,6 +327,13 @@ func (et *ExcelTemplate) processSheet(sheet string) error {
 
 				column := Column{_key: colNum, ColNum: colNum, RenderColNum: colNum - 1}
 				column.Header = value
+				for _, mergeRange := range mergeRanges {
+					//计算是不是合并列 IsMergeCell
+					if colNum >= mergeRange.StartCol && colNum <= mergeRange.EndCol && rowNum >= mergeRange.StartRow && rowNum <= mergeRange.EndRow {
+						column.IsMergeCell = true
+						column.MergeRange = &mergeRange
+					}
+				}
 
 				colName, err := excelize.ColumnNumberToName(colNum)
 				if err != nil {
@@ -421,6 +465,24 @@ func (et *ExcelTemplate) processDataRow(sheet string, listIndex int, rowData map
 	}
 	for _, column := range columns {
 		cellName := fmt.Sprintf("%s%d", column.RenderColName, rowNum)
+		if column.IsMergeCell {
+			startCol := column.MergeRange.StartCol - 1
+			endCol := column.MergeRange.EndCol - 1
+			topLeftColStr, err := excelize.ColumnNumberToName(startCol)
+			if err != nil {
+				return fmt.Errorf("processDataRow: failed to convert column number to name [sheet=%s, col=%d]: %w", sheet, startCol, err)
+			}
+			bottomRightCellStr, err := excelize.ColumnNumberToName(endCol)
+			if err != nil {
+				return fmt.Errorf("processDataRow: failed to convert column number to name [sheet=%s, col=%d]: %w", sheet, endCol, err)
+			}
+			topLeftCell := fmt.Sprintf("%s%d", topLeftColStr, rowNum)
+			bottomRightCell := fmt.Sprintf("%s%d", bottomRightCellStr, rowNum)
+			err = et.File.MergeCell(sheet, topLeftCell, bottomRightCell)
+			if err != nil {
+				return fmt.Errorf("processDataRow: failed to merge [sheet=%s, cell=%s:%s]: %w", sheet, topLeftCell, bottomRightCell, err)
+			}
+		}
 		err := et.processCellData(sheet, cellName, column, _listIndex, rowNum, rowData, isSubtotal)
 		if err != nil {
 			return fmt.Errorf("processDataRow: failed to set cell value [sheet=%s, cell=%s]: %w", sheet, cellName, err)
