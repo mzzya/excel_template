@@ -13,6 +13,8 @@ import (
 	"github.com/samber/lo"
 	"github.com/xuri/excelize/v2"
 
+	_ "image/gif"
+	_ "image/jpeg"
 	_ "image/png"
 )
 
@@ -382,7 +384,7 @@ func (et *ExcelTemplate) processSheet(sheet string) error {
 		}
 	}
 
-	if list == nil || len(list) == 0 {
+	if len(list) == 0 {
 		return nil
 	}
 
